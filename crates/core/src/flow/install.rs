@@ -4,7 +4,7 @@ pub use super::install_error::ProtoInstallError;
 use crate::checksum::*;
 use crate::env::ProtoConsole;
 use crate::flow::lock::Locker;
-use crate::helpers::{extract_filename_from_url, is_archive_file, is_executable, is_offline};
+use crate::helpers::{is_archive_file, is_offline};
 use crate::lockfile::*;
 use crate::tool::Tool;
 use crate::tool_spec::ToolSpec;
@@ -20,6 +20,7 @@ use std::sync::Arc;
 use system_env::System;
 use tokio::process::Command;
 use tracing::{debug, instrument, warn};
+use warpgate::extract_file_name_from_url;
 
 pub use starbase_utils::net::OnChunkFn;
 pub type OnPhaseFn = Arc<dyn Fn(InstallPhase) + Send + Sync>;
@@ -177,8 +178,8 @@ impl<'tool> Installer<'tool> {
 
                 install_lock.unlock()?;
 
-                fs::remove_dir_all(&self.product_dir)?;
-                fs::remove_dir_all(&self.temp_dir)?;
+                let _ = fs::remove_dir_all(&self.product_dir);
+                let _ = fs::remove_dir_all(&self.temp_dir);
 
                 Err(error)
             }
@@ -337,10 +338,9 @@ impl<'tool> Installer<'tool> {
 
         // Download the prebuilt
         let download_url = config.rewrite_url(output.download_url);
-        let download_filename = match output.download_name {
-            Some(name) => name,
-            None => extract_filename_from_url(&download_url),
-        };
+        let download_filename = output
+            .download_name
+            .unwrap_or_else(|| extract_file_name_from_url(&download_url));
         let download_file = self.temp_dir.join(&download_filename);
 
         record.source = Some(download_url.clone());
@@ -360,7 +360,9 @@ impl<'tool> Installer<'tool> {
             &download_url,
             &download_file,
             DownloadOptions {
-                downloader: Some(Box::new(client.create_downloader())),
+                downloader: Some(Box::new(
+                    client.create_downloader_with_headers(output.http_headers.clone()),
+                )),
                 on_chunk: options.on_download_chunk.clone(),
             },
         )
@@ -369,10 +371,9 @@ impl<'tool> Installer<'tool> {
         // Verify against a URL that contains the checksum
         if let Some(checksum_url) = output.checksum_url {
             let checksum_url = config.rewrite_url(checksum_url);
-            let checksum_filename = match output.checksum_name {
-                Some(name) => name,
-                None => extract_filename_from_url(&checksum_url),
-            };
+            let checksum_filename = output
+                .checksum_name
+                .unwrap_or_else(|| extract_file_name_from_url(&checksum_url));
             let checksum_file = self.temp_dir.join(&checksum_filename);
 
             options.on_phase_change.as_ref().inspect(|func| {
@@ -390,10 +391,7 @@ impl<'tool> Installer<'tool> {
             net::download_from_url_with_options(
                 &checksum_url,
                 &checksum_file,
-                DownloadOptions {
-                    downloader: Some(Box::new(client.create_downloader())),
-                    on_chunk: None,
-                },
+                DownloadOptions::new(client.create_downloader_with_headers(output.http_headers)),
             )
             .await?;
 
@@ -509,7 +507,7 @@ impl<'tool> Installer<'tool> {
                     script = ?abs_script,
                     "Post-install script does not exist",
                 );
-            } else if !is_executable(&abs_script) {
+            } else if !fs::is_executable(&abs_script) {
                 warn!(
                     tool = self.tool.context.as_str(),
                     script = ?abs_script,

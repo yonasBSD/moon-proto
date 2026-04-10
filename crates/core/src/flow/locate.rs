@@ -1,9 +1,9 @@
 pub use super::locate_error::ProtoLocateError;
 use crate::helpers::ENV_VAR;
-use crate::helpers::is_executable;
 use crate::layout::BinManager;
 use crate::tool::Tool;
 use crate::tool_spec::ToolSpec;
+use indexmap::IndexSet;
 use proto_pdk_api::{
     ExecutableConfig, LocateExecutablesInput, LocateExecutablesOutput, PluginFunction,
 };
@@ -11,13 +11,10 @@ use proto_shim::{get_exe_file_name, get_shim_file_name};
 use serde::Serialize;
 use starbase_utils::{fs, path};
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::{debug, instrument};
 use version_spec::VersionSpec;
 
-fn should_update_perms(path: &Path, update_perms: bool) -> bool {
-    update_perms && path.exists() && !is_executable(path)
-}
 // Executable = File within the tool's install directory
 // Binary/shim = File within proto's store directories
 
@@ -114,7 +111,7 @@ impl<'tool> Locator<'tool> {
 
             let path = self.product_dir.join(path::normalize_separators(exe_path));
 
-            if should_update_perms(&path, config.update_perms) {
+            if config.update_perms && path.exists() && !fs::is_executable(&path) {
                 fs::update_perms(&path, None)?;
             }
 
@@ -379,16 +376,15 @@ impl<'tool> Locator<'tool> {
                 continue;
             }
 
-            let has_files = fs::read_dir(dir).is_ok_and(|list| {
-                !list
-                    .into_iter()
-                    .filter(|entry| entry.path().is_file())
-                    .collect::<Vec<_>>()
-                    .is_empty()
-            });
-
-            if has_files {
-                debug!(tool = self.tool.context.as_str(), dir = ?dir, "Found a usable globals directory");
+            // Don't use starbase as it collects all files
+            if std::fs::read_dir(dir).is_ok_and(|list| {
+                list.into_iter()
+                    .any(|entry| entry.is_ok_and(|en| en.path().is_file()))
+            }) {
+                debug!(
+                    tool = self.tool.context.as_str(), dir = ?dir,
+                    "Found a usable globals directory"
+                );
 
                 found_dir = Some(dir.to_owned());
                 break;
@@ -450,7 +446,7 @@ impl<'tool> Locator<'tool> {
         self.globals_prefix = output.globals_prefix;
 
         // Find all possible global directories that packages can be installed to
-        let mut resolved_dirs = vec![];
+        let mut resolved_dirs = IndexSet::new();
 
         'outer: for dir_lookup in output.globals_lookup_dirs {
             let mut dir = dir_lookup.clone();
@@ -489,10 +485,7 @@ impl<'tool> Locator<'tool> {
                 PathBuf::from(path::normalize_separators(dir))
             };
 
-            // Don't use a set as we need to persist the order!
-            if !resolved_dirs.contains(&dir) {
-                resolved_dirs.push(dir);
-            }
+            resolved_dirs.insert(dir);
         }
 
         debug!(
@@ -501,9 +494,9 @@ impl<'tool> Locator<'tool> {
             "Located possible globals directories",
         );
 
-        self.globals_dirs = resolved_dirs.clone();
+        self.globals_dirs = resolved_dirs.into_iter().collect();
 
-        Ok(resolved_dirs)
+        Ok(self.globals_dirs.clone())
     }
 
     /// Return the globals prefix, after it has been located.

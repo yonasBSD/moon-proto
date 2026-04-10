@@ -17,9 +17,6 @@ pub struct ExecArgs {
     #[arg(long, help = "Inherit tools to initialize from .prototools configs")]
     pub tools_from_config: bool,
 
-    #[arg(long, help = "Execute the command as-is without quoting or escaping")]
-    pub raw: bool,
-
     #[arg(long, help = "Shell to execute the command with")]
     pub shell: Option<ShellType>,
 
@@ -29,7 +26,7 @@ pub struct ExecArgs {
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn exec(session: ProtoSession, mut args: ExecArgs) -> AppResult {
+pub async fn exec(session: ProtoSession, args: ExecArgs) -> AppResult {
     if args.command.is_empty() {
         return Err(ProtoCliError::ExecMissingCommand.into());
     }
@@ -97,15 +94,7 @@ pub async fn exec(session: ProtoSession, mut args: ExecArgs) -> AppResult {
         .await?;
 
     // Create and run command
-    let command = match args.shell {
-        None => workflow.create_command(args.command.remove(0), args.command)?,
-        Some(shell) => workflow.create_command_with_shell(
-            shell.build(),
-            args.command.remove(0),
-            args.command,
-            args.raw,
-        )?,
-    };
+    let command = workflow.create_command(args.command, args.shell)?;
 
     // Must be the last line!
     exec_command_and_replace(command)

@@ -1,9 +1,12 @@
 use crate::clients::*;
 use crate::helpers::{
-    create_cache_key, determine_cache_extension, download_from_url_to_file, move_or_unpack_download,
+    determine_cache_extension, download_from_url_to_file, extract_file_name_from_url, hash_base64,
+    hash_sha256, move_or_unpack_download,
 };
 use crate::loader_error::WarpgateLoaderError;
-use crate::protocols::{FileLoader, GitHubLoader, HttpLoader, LoadFrom, LoaderProtocol, OciLoader};
+use crate::protocols::{
+    DataLoader, FileLoader, GitHubLoader, HttpLoader, LoadFrom, LoaderProtocol, OciLoader,
+};
 use crate::registry::RegistryConfig;
 use once_cell::sync::OnceCell;
 use starbase_styles::color;
@@ -23,6 +26,9 @@ pub type OfflineChecker = Arc<fn() -> bool>;
 pub struct PluginLoader {
     /// Duration in seconds in which to cache downloaded plugins.
     cache_duration: Duration,
+
+    /// Loader for referencing local plugins using byte streams.
+    data_loader: OnceCell<DataLoader>,
 
     /// Loader for referencing local plugins using file paths.
     file_loader: OnceCell<FileLoader>,
@@ -51,9 +57,6 @@ pub struct PluginLoader {
     /// Plugin registry locations
     registries: Vec<RegistryConfig>,
 
-    /// A unique seed for generating hashes.
-    seed: Option<String>,
-
     /// OCI client instance.
     oci_client: OnceCell<Arc<OciClient>>,
 
@@ -70,6 +73,7 @@ impl PluginLoader {
 
         Self {
             cache_duration: Duration::from_secs(86400 * 30), // 30 days
+            data_loader: OnceCell::new(),
             file_loader: OnceCell::new(),
             github_loader: OnceCell::new(),
             http_client: OnceCell::new(),
@@ -80,7 +84,6 @@ impl PluginLoader {
             offline_checker: None,
             plugins_dir: plugins_dir.to_owned(),
             registries: vec![],
-            seed: None,
             temp_dir: temp_dir.as_ref().to_owned(),
         }
     }
@@ -95,6 +98,11 @@ impl PluginLoader {
         for registry in registries {
             self.add_registry(registry);
         }
+    }
+
+    /// Return a data loader for use with [`DataLocator`]s.
+    pub fn get_data_loader(&self) -> Result<&DataLoader, WarpgateLoaderError> {
+        self.data_loader.get_or_try_init(|| Ok(DataLoader {}))
     }
 
     /// Return a file loader for use with [`FileLocator`]s.
@@ -157,6 +165,11 @@ impl PluginLoader {
 
         // Determine the source location
         let (source, is_latest) = match locator {
+            PluginLocator::Data(data) => {
+                let loader = self.get_data_loader()?;
+
+                (loader.load(id, data, &()).await?, loader.is_latest(data))
+            }
             PluginLocator::File(file) => {
                 let loader = self.get_file_loader()?;
 
@@ -185,34 +198,33 @@ impl PluginLoader {
             }
         };
 
-        // Check if destination already exists
-        let cache_path = match &source {
-            LoadFrom::Blob { ext, hash, .. } => self.create_cache_path(id, hash, ext, is_latest),
-            LoadFrom::File(path) => {
-                // Files ignore caching rules
-                return Ok(path.to_path_buf());
-            }
-            LoadFrom::Url(url) => self.create_cache_path(
-                id,
-                create_cache_key(url, self.seed.as_deref()).as_str(),
-                determine_cache_extension(url).unwrap_or(".wasm"),
-                is_latest,
-            ),
-        };
+        let cache_path = match source {
+            LoadFrom::Blob {
+                data, ext, hash, ..
+            } => {
+                let cache_path = self.create_cache_path(id, &hash, &ext, is_latest);
 
-        if self.is_cached(id, &cache_path)? {
-            return Ok(cache_path);
-        }
+                if !self.is_cached(id, &cache_path)? {
+                    fs::write_file(&cache_path, data)?;
+                }
 
-        // Acquire the source and write to the destination
-        match source {
-            LoadFrom::Blob { data, .. } => {
-                fs::write_file(&cache_path, data)?;
+                cache_path
             }
+            LoadFrom::File(path) => path.to_path_buf(),
             LoadFrom::Url(url) => {
-                self.download_plugin(id, &url, &cache_path).await?;
+                let cache_path = self.create_cache_path(
+                    id,
+                    hash_sha256(&url).as_str(),
+                    determine_cache_extension(&url).unwrap_or(".wasm"),
+                    is_latest,
+                );
+
+                if !self.is_cached(id, &cache_path)? {
+                    self.download_plugin(id, &url, &cache_path).await?;
+                }
+
+                cache_path
             }
-            _ => {}
         };
 
         Ok(cache_path)
@@ -222,9 +234,11 @@ impl PluginLoader {
     /// located in the cached plugins directory.
     pub fn create_cache_path(&self, id: &Id, hash: &str, ext: &str, is_latest: bool) -> PathBuf {
         self.plugins_dir.join(format!(
-            "{}{}{hash}{ext}",
+            "{}-{}{}.{}",
             path::encode_component(id.as_str()),
-            if is_latest { "-latest-" } else { "-" },
+            if is_latest { "latest-" } else { "" },
+            hash,
+            ext.trim_start_matches('.')
         ))
     }
 
@@ -290,11 +304,6 @@ impl PluginLoader {
         self.offline_checker = Some(Arc::new(op));
     }
 
-    /// Set the provided value as a seed for generating hashes.
-    pub fn set_seed(&mut self, value: &str) {
-        self.seed = Some(value.to_owned());
-    }
-
     #[instrument(skip(self))]
     async fn download_plugin(
         &self,
@@ -316,10 +325,16 @@ impl PluginLoader {
             "Downloading plugin from URL"
         );
 
-        let temp_file = self.temp_dir.join(fs::file_name(dest_file));
+        let temp_file = self.temp_dir.join(format!(
+            "{}-{}",
+            hash_base64(dest_file.to_str().unwrap_or(source_url)),
+            extract_file_name_from_url(source_url)
+        ));
 
         download_from_url_to_file(source_url, &temp_file, self.get_http_client()?).await?;
         move_or_unpack_download(&temp_file, dest_file)?;
+
+        fs::remove_file(temp_file)?;
 
         Ok(())
     }

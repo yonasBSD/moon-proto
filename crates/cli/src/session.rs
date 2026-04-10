@@ -182,7 +182,7 @@ impl ProtoSession {
 
             let proto = Arc::clone(&self.env);
 
-            set.spawn(async move {
+            set.spawn(Box::pin(async move {
                 let mut record = ToolRecord::new(load_tool(&context, &proto).await?);
 
                 if opt_inherit_remote {
@@ -194,11 +194,14 @@ impl ProtoSession {
                 }
 
                 Ok(record)
-            });
+            }));
         }
 
         while let Some(result) = set.join_next().await {
-            let mut record: ToolRecord = result.unwrap()?;
+            let mut record: ToolRecord =
+                result.map_err(|error| ProtoLoaderError::FailedJoin {
+                    error: Box::new(error),
+                })??;
 
             if options.inherit_local {
                 record.inherit_from_local(config);
@@ -232,7 +235,7 @@ impl ProtoSession {
         let reporter_clone = OwnedOrShared::Shared(reporter.clone());
         let console = self.console.clone();
 
-        let handle = tokio::task::spawn(async move {
+        let handle = tokio::spawn(async move {
             console
                 .render_interactive(element! {
                     Progress(

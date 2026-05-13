@@ -15,6 +15,56 @@
 - [Rust](https://github.com/moonrepo/plugins/blob/master/tools/rust/CHANGELOG.md)
 - [Schema (TOML, JSON, YAML)](https://github.com/moonrepo/plugins/blob/master/tools/internal-schema/CHANGELOG.md)
 
+## 0.57.0
+
+#### 🎉 Release
+
+In an effort to combat GitHub's flakiness when downloading plugins, we're migrating from raw URLs to referencing OCI artifacts in ghcr.io / GitHub Packages (also known as GitHub Container Registry). Yeah we know, we're still using GitHub, but we want to experiment with this, and verify that ghcr.io is more reliable and stable than the raw file CDN.
+
+If this turns out not to be true, we'll revert back to the previous implementation and look into other alternatives.
+
+#### 💥 Breaking
+
+- If you are using a custom OCI registry that requires authentication, you will now need to set `auth = true` in your settings.
+  ```toml
+  [settings]
+  unstable-registries = [{ registry = "custom.host.com", auth = true }]
+  ```
+- If you are using a custom OCI registry as the fallback for unknown plugin identifiers, you will now need to set `default = true` in your settings.
+  ```toml
+  [settings]
+  unstable-registries = [{ registry = "custom.host.com", default = true }]
+  ```
+- When installing a tool for the first time, we no longer pin the version to the global `~/.proto/.prototools` config.
+
+#### 🚀 Updates
+
+- Added 2 new backends, `cargo` and `npm`, allowing you to install CLIs from their respective registries. Simply prefix the package name with the backend identifier, for example:
+  ```toml
+  "cargo:cargo-dist" = "0.31"
+  "npm:typescript" = "6"
+  ```
+- Added `auth` and `default` options to the `settings.unstable-registries` configuration entries.
+  - `auth` indicates whether the registry requires authentication or not. If true, we'll attempt to retrieve credentials from the Docker config for this registry's host.
+  - `default` indicates whether this registry should be used as the default when no registry is specified in the locator, or when only an identifier is provided.
+- Added support for `.tar.zst` archives (tar + zstd compression).
+- Updated OCI registry artifacts to support tar archives as a supported media type.
+  - The archive will be downloaded, then unpacked, and searched for a valid WASM file.
+- Updated `proto versions` command and `list_tool_versions` MCP tool to support a filter option, which is a version range/requirement, to filter the versions list.
+  - `proto versions node ~24`
+  - `list_tool_versions node --filter ~24`
+- Updated the [`moonrepo/build-wasm-plugin`](https://github.com/moonrepo/build-wasm-plugin) GitHub action to support publishing to ghcr.io.
+
+#### 🐞 Fixes
+
+- Fixed an issue where some tools that require a backend (asdf) would generate broken shims.
+- Fixed an issue where `proto outdated --update` would overwrite aliases.
+
+#### ⚙️ Internal
+
+- Added extensive E2E tests to catch issues and regressions moving forward. These E2E tests run on the command line, not through Rust's testing framework, to better simulate real world usage and catch issues that unit tests may miss.
+- Updated dependencies.
+
 ## 0.56.4
 
 #### 🚀 Updates

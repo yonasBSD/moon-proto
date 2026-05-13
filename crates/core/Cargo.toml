@@ -1,6 +1,6 @@
 [package]
 name = "proto_core"
-version = "0.56.4"
+version = "0.57.0"
 edition = "2024"
 license = "MIT"
 description = "Core proto APIs."
@@ -9,15 +9,15 @@ repository = "https://github.com/moonrepo/proto"
 rust-version = "1.89.0"
 
 [dependencies]
-proto_pdk_api = { version = "0.31.11", path = "../pdk-api", features = [
+proto_pdk_api = { version = "0.31.12", path = "../pdk-api", features = [
     "schematic",
 ] }
-proto_shim = { version = "0.8.1", path = "../shim" }
+proto_shim = { version = "0.8.2", path = "../shim" }
 system_env = { version = "0.10.0", path = "../system-env" }
 version_spec = { version = "0.10.3", path = "../version-spec", features = [
     "schematic",
 ] }
-warpgate = { version = "0.30.5", path = "../warpgate", features = [
+warpgate = { version = "0.31.0", path = "../warpgate", features = [
     "miette",
     "schematic",
 ] }
@@ -54,7 +54,7 @@ starbase_console = { workspace = true, features = ["ui"] }
 starbase_sandbox = { workspace = true, optional = true }
 starbase_shell = { workspace = true }
 starbase_styles = { workspace = true }
-starbase_utils = { workspace = true, features = ["fs-lock", "yaml"] }
+starbase_utils = { workspace = true, features = ["yaml"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 toml_edit = { workspace = true }

@@ -15,6 +15,12 @@
 - [Rust](https://github.com/moonrepo/plugins/blob/master/tools/rust/CHANGELOG.md)
 - [Schema (TOML, JSON, YAML)](https://github.com/moonrepo/plugins/blob/master/tools/internal-schema/CHANGELOG.md)
 
+## 0.57.1
+
+#### 🐞 Fixes
+
+- Fixed a regression where we would make unnecessary network calls when downloading plugins and the cache exists.
+
 ## 0.57.0
 
 #### 🎉 Release

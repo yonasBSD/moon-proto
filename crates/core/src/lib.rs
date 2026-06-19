@@ -12,7 +12,9 @@ mod loader;
 mod loader_error;
 mod lockfile;
 pub mod registry;
+pub mod reporter;
 mod settings;
+mod telemetry;
 #[cfg(feature = "test")]
 pub mod test_utils;
 mod tool;

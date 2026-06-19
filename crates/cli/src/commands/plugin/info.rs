@@ -1,5 +1,5 @@
 use crate::components::*;
-use crate::session::{LoadToolOptions, ProtoSession};
+use crate::session::{LoadToolOptions, ProtoSession, SessionResult};
 use clap::Args;
 use iocraft::prelude::element;
 use proto_core::flow::locate::Locator as LocatorFlow;
@@ -8,14 +8,13 @@ use proto_core::{
     flow::locate::ExecutableLocation,
 };
 use serde::Serialize;
-use starbase::AppResult;
 use starbase_console::ui::*;
-use starbase_utils::json;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use tracing::instrument;
 
 #[derive(Serialize)]
-struct InfoPluginResult {
+struct PluginInfoOutput {
     bins: Vec<ExecutableLocation>,
     config: ProtoToolConfig,
     exe_file: Option<PathBuf>,
@@ -32,13 +31,13 @@ struct InfoPluginResult {
 }
 
 #[derive(Args, Clone, Debug)]
-pub struct InfoPluginArgs {
+pub struct PluginInfoArgs {
     #[arg(required = true, help = "ID of plugin")]
     id: Id,
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn info(session: ProtoSession, args: InfoPluginArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn info(session: ProtoSession, args: PluginInfoArgs) -> SessionResult {
     let global_config = session.load_config_with_mode(ConfigMode::Global)?;
     let context = ToolContext::new(args.id.clone());
 
@@ -60,8 +59,8 @@ pub async fn info(session: ProtoSession, args: InfoPluginArgs) -> AppResult {
     let shims = locator.locate_shims().await?;
     let locations = locator.locate_all().await?;
 
-    if session.should_print_json() {
-        let result = InfoPluginResult {
+    if session.is_json_format() {
+        session.console.write_json_for_format(PluginInfoOutput {
             bins,
             config: tool.config.clone(),
             exe_file: Some(locations.exe_file.clone()),
@@ -75,12 +74,7 @@ pub async fn info(session: ProtoSession, args: InfoPluginArgs) -> AppResult {
             manifest: tool.inventory.manifest.clone(),
             metadata: tool.metadata.clone(),
             plugin: tool.locator.clone().unwrap(),
-        };
-
-        session
-            .console
-            .out
-            .write_line(json::format(&result, true)?)?;
+        })?;
 
         return Ok(None);
     }

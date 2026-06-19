@@ -1,14 +1,13 @@
 use crate::components::{Locator, SpecAliasesMap, VersionsMap};
-use crate::session::{LoadToolOptions, ProtoSession};
+use crate::session::{LoadToolOptions, ProtoSession, SessionResult};
 use clap::Args;
 use iocraft::prelude::element;
 use proto_core::{ConfigMode, Id, PluginLocator, ProtoToolConfig, ToolContext, ToolManifest};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
-use starbase::AppResult;
 use starbase_console::ui::*;
-use starbase_utils::json;
 use std::collections::BTreeMap;
+use tracing::instrument;
 
 #[derive(Serialize)]
 struct PluginItem {
@@ -19,7 +18,7 @@ struct PluginItem {
 }
 
 #[derive(Args, Clone, Debug)]
-pub struct ListPluginsArgs {
+pub struct PluginListArgs {
     #[arg(help = "ID of plugins to list")]
     ids: Vec<Id>,
 
@@ -30,8 +29,8 @@ pub struct ListPluginsArgs {
     versions: bool,
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn list(session: ProtoSession, args: ListPluginsArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn list(session: ProtoSession, args: PluginListArgs) -> SessionResult {
     let global_config = session.load_config_with_mode(ConfigMode::Global)?;
 
     let mut tools = session
@@ -60,7 +59,7 @@ pub async fn list(session: ProtoSession, args: ListPluginsArgs) -> AppResult {
 
     tools.sort_by(|a, d| a.context.cmp(&d.context));
 
-    if session.should_print_json() {
+    if session.is_json_format() {
         let items = tools
             .into_iter()
             .map(|tool| {
@@ -76,10 +75,7 @@ pub async fn list(session: ProtoSession, args: ListPluginsArgs) -> AppResult {
             })
             .collect::<FxHashMap<_, _>>();
 
-        session
-            .console
-            .out
-            .write_line(json::format(&items, true)?)?;
+        session.console.write_json_for_format(items)?;
 
         return Ok(None);
     }

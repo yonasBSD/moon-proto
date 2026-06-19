@@ -1,12 +1,12 @@
 use crate::components::CodeBlock;
-use crate::session::ProtoSession;
+use crate::session::{ProtoSession, SessionResult};
 use clap::Args;
 use iocraft::prelude::*;
 use proto_core::{ProtoConfig, ProtoConfigFile};
 use serde::Serialize;
-use starbase::AppResult;
 use starbase_console::ui::*;
-use starbase_utils::{json, toml};
+use starbase_utils::toml;
+use tracing::instrument;
 
 #[derive(Args, Clone, Debug)]
 pub struct DebugConfigArgs {
@@ -15,13 +15,13 @@ pub struct DebugConfigArgs {
 }
 
 #[derive(Serialize)]
-struct DebugConfigResult<'a> {
+struct DebugConfigOutput<'a> {
     config: &'a ProtoConfig,
     files: Vec<&'a ProtoConfigFile>,
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn config(session: ProtoSession, args: DebugConfigArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn config(session: ProtoSession, args: DebugConfigArgs) -> SessionResult {
     let env = &session.env;
     let manager = env.load_file_manager()?;
     let config = env.load_config()?;
@@ -33,20 +33,15 @@ pub async fn config(session: ProtoSession, args: DebugConfigArgs) -> AppResult {
         return Ok(None);
     }
 
-    if session.should_print_json() {
-        let result = DebugConfigResult {
+    if session.is_json_format() {
+        session.console.write_json_for_format(DebugConfigOutput {
             config,
             files: manager
                 .get_config_files()
                 .into_iter()
                 .rev()
                 .collect::<Vec<_>>(),
-        };
-
-        session
-            .console
-            .out
-            .write_line(json::format(&result, true)?)?;
+        })?;
 
         return Ok(None);
     }

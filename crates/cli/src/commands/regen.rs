@@ -1,12 +1,10 @@
-use crate::session::ProtoSession;
+use crate::session::{ProtoSession, SessionResult};
 use clap::Args;
-use iocraft::prelude::element;
 use proto_core::flow::link::Linker;
 use proto_core::flow::resolve::Resolver;
-use starbase::AppResult;
 use starbase_console::ui::*;
 use starbase_utils::fs;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 #[derive(Args, Clone, Debug)]
 pub struct RegenArgs {
@@ -14,8 +12,8 @@ pub struct RegenArgs {
     bin: bool,
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn regen(session: ProtoSession, args: RegenArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn regen(session: ProtoSession, args: RegenArgs) -> SessionResult {
     let store = &session.env.store;
     let progress = session.render_progress_loader().await;
 
@@ -66,7 +64,7 @@ pub async fn regen(session: ProtoSession, args: RegenArgs) -> AppResult {
 
             Resolver::resolve(&tool, &mut spec, true).await?;
 
-            let linker = Linker::new(&tool, &spec);
+            let mut linker = Linker::new(&tool, &spec)?;
 
             linker.link_shims(true).await?;
 
@@ -81,17 +79,14 @@ pub async fn regen(session: ProtoSession, args: RegenArgs) -> AppResult {
 
     progress.stop().await?;
 
-    session.console.render(element! {
-        Notice(variant: Variant::Success) {
-            StyledText(
-                content: if args.bin {
-                    "Regenerated shims and bins!"
-                } else {
-                    "Regenerated shims!"
-                },
-            )
-        }
-    })?;
+    session.console.notice(
+        Variant::Success,
+        if args.bin {
+            "Regenerated shims and bins!"
+        } else {
+            "Regenerated shims!"
+        },
+    )?;
 
     Ok(None)
 }

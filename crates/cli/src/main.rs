@@ -13,10 +13,11 @@ mod workflows;
 
 use app::{App as CLI, Commands, DebugCommands, PluginCommands};
 use clap::Parser;
+use proto_core::reporter::ReporterFormat;
 use session::ProtoSession;
 use starbase::{
     App, MainResult,
-    tracing::{LogLevel, TracingOptions},
+    tracing::{LogLevel, OtelOptions, TracingOptions},
 };
 use starbase_utils::{envx, string_vec};
 use std::env;
@@ -39,24 +40,35 @@ fn get_tracing_modules() -> Vec<String> {
 async fn main() -> MainResult {
     sigpipe::reset();
 
-    let cli = CLI::parse();
+    let mut cli = CLI::parse();
     cli.setup_env_vars();
 
     let app = App::default();
     app.setup_diagnostics();
 
+    let is_exec_command = matches!(
+        cli.command,
+        Commands::Exec { .. } | Commands::Run { .. } | Commands::Shell { .. }
+    );
+
     let _guard = app.setup_tracing(TracingOptions {
-        default_level: if matches!(cli.command, Commands::Bin { .. } | Commands::Run { .. }) {
+        default_level: if is_exec_command || matches!(cli.command, Commands::Bin { .. }) {
             LogLevel::Warn
         } else if matches!(cli.command, Commands::Completions { .. }) {
             LogLevel::Off
         } else {
             LogLevel::Info
         },
-        dump_trace: cli.dump && !matches!(cli.command, Commands::Run { .. }),
+        dump_trace: cli.dump && !is_exec_command,
         filter_modules: get_tracing_modules(),
         log_env: "PROTO_APP_LOG".into(),
         log_file: cli.log_file.clone(),
+        ndjson: cli.reporter == ReporterFormat::Ndjson,
+        otel: OtelOptions {
+            enabled: cli.otel,
+            logs_enabled: cli.otel_logs,
+            service_name: cli.otel_service_name.clone(),
+        },
         show_spans: cli.log.is_verbose(),
         // test_env: "PROTO_TEST".into(),
         ..TracingOptions::default()
@@ -75,8 +87,8 @@ async fn main() -> MainResult {
         session.cli_version
     );
 
-    let exit_code = app
-        .run(session, |session| async {
+    let mut outcome = app
+        .run(session.clone(), |session: ProtoSession| async {
             match session.cli.command.clone() {
                 Commands::Activate(args) => commands::activate(session, args).await,
                 Commands::Alias(args) => commands::alias(session, args).await,
@@ -113,7 +125,25 @@ async fn main() -> MainResult {
                 Commands::Versions(args) => commands::versions(session, args).await,
             }
         })
-        .await?;
+        .await;
 
-    Ok(ExitCode::from(exit_code))
+    if let Some(error) = outcome.error {
+        // If NDJSON format, we must print the error as JSON so
+        // that it parses correctly by the consumer!
+        if session.cli.reporter == ReporterFormat::Ndjson {
+            session.console.main_error(error.to_string())?;
+            session.console.out.flush()?;
+
+            if outcome.exit_code == 0 {
+                outcome.exit_code = 1;
+            }
+        }
+        // Otherwise bubble up the error so that miette renders
+        // it nicely for the user using the fancy output!
+        else {
+            return Err(error);
+        }
+    }
+
+    Ok(ExitCode::from(outcome.exit_code))
 }

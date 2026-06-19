@@ -1,4 +1,4 @@
-use crate::session::ProtoSession;
+use crate::session::{ProtoSession, SessionResult};
 use crate::shell::{
     Export, find_first_profile, format_exports, prompt_for_shell, prompt_for_shell_profile,
     update_profile_if_not_setup,
@@ -7,14 +7,13 @@ use clap::Args;
 use iocraft::FlexDirection;
 use iocraft::prelude::{View, element};
 use proto_shim::get_exe_file_name;
-use starbase::AppResult;
 use starbase_console::ui::*;
 use starbase_shell::{BoxedShell, ShellType};
 use starbase_styles::color;
 use starbase_utils::envx;
 use std::env;
 use std::path::PathBuf;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 #[cfg(windows)]
 mod windows;
@@ -42,8 +41,8 @@ pub struct SetupArgs {
 
 const DISCORD: &str = "https://discord.gg/qCh9MEynv2";
 
-#[tracing::instrument(skip_all)]
-pub async fn setup(session: ProtoSession, args: SetupArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn setup(session: ProtoSession, args: SetupArgs) -> SessionResult {
     let paths = envx::paths();
 
     if paths.contains(&session.env.store.shims_dir) || paths.contains(&session.env.store.bin_dir) {

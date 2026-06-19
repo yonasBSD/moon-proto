@@ -1,6 +1,6 @@
 use crate::commands::install::{InstallArgs, install_one};
 use crate::error::ProtoCliError;
-use crate::session::ProtoSession;
+use crate::session::{ProtoSession, SessionResult};
 use crate::workflows::{ExecCommandOptions, ExecWorkflow, ExecWorkflowParams};
 use clap::Args;
 use miette::IntoDiagnostic;
@@ -14,13 +14,12 @@ use proto_core::{
 use proto_pdk_api::ExecutableConfig;
 use proto_shim::{exec_command_and_replace, locate_proto_exe};
 use rustc_hash::FxHashMap;
-use starbase::AppResult;
 use starbase_styles::color;
 use starbase_utils::{envx, path};
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 #[derive(Args, Clone, Debug)]
 pub struct RunArgs {
@@ -206,8 +205,8 @@ fn run_global_tool(
     Err(error)
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn run(session: ProtoSession, mut args: RunArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn run(session: ProtoSession, mut args: RunArgs) -> SessionResult {
     let tool = match session.load_tool(&args.context).await {
         Ok(tool) => tool,
         Err(ProtoLoaderError::UnknownTool { id }) => {
@@ -219,7 +218,7 @@ pub async fn run(session: ProtoSession, mut args: RunArgs) -> AppResult {
                 "Tool not found, checking shims registry for bin-to-tool mapping"
             );
 
-            let registry = ShimRegistry::load(&session.env.store.shims_dir)?;
+            let registry = ShimRegistry::load_from(&session.env.store.shims_dir)?;
             let mut custom_context: Option<ToolContext> = None;
             let mut before_args: Vec<String> = vec![];
             let mut after_args: Vec<String> = vec![];

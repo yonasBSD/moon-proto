@@ -118,7 +118,7 @@ impl Store {
 
     #[instrument(skip(self))]
     pub fn load_shims_registry(&self) -> Result<ShimRegistry, ProtoLayoutError> {
-        ShimRegistry::load(&self.shims_dir)
+        ShimRegistry::load_from(&self.shims_dir)
     }
 
     #[instrument(skip(self))]
@@ -137,7 +137,7 @@ impl Store {
         // so just copy the binary... annoying...
         #[cfg(windows)]
         {
-            fs::copy_file(src_path, bin_path)?;
+            fs::reflink_file(src_path, bin_path)?;
         }
 
         #[cfg(unix)]

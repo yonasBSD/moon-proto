@@ -2,19 +2,19 @@ use super::build::*;
 pub use super::build_error::ProtoBuildError;
 pub use super::install_error::ProtoInstallError;
 use crate::checksum::*;
-use crate::env::ProtoConsole;
 use crate::flow::lock::Locker;
 use crate::helpers::{is_archive_file, is_offline};
 use crate::lockfile::*;
+use crate::reporter::ProtoConsole;
 use crate::tool::Tool;
 use crate::tool_spec::ToolSpec;
 use crate::utils::log::LogWriter;
 use crate::utils::{archive, process};
 use proto_pdk_api::*;
-use starbase_shell::ShellType;
+use starbase_shell::{ShellType, join_exe_args};
 use starbase_styles::color;
 use starbase_utils::net::DownloadOptions;
-use starbase_utils::{fs, net, path};
+use starbase_utils::{fs, hash, net, path};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use system_env::System;
@@ -64,7 +64,9 @@ impl<'tool> Installer<'tool> {
     pub fn new(tool: &'tool Tool, spec: &'tool ToolSpec) -> Self {
         Self {
             product_dir: tool.get_product_dir(spec),
-            temp_dir: tool.get_temp_dir().to_path_buf(),
+            temp_dir: tool
+                .get_temp_dir()
+                .join(hash::base64::from_bytes(spec.req.to_string())),
             tool,
             spec,
         }
@@ -114,18 +116,22 @@ impl<'tool> Installer<'tool> {
 
             fs::create_dir_all(&self.product_dir)?;
 
-            let output: NativeInstallOutput = self
-                .tool
-                .plugin
-                .call_func_with(
-                    PluginFunction::NativeInstall,
-                    NativeInstallInput {
-                        context: self.tool.create_plugin_context(self.spec),
-                        install_dir: self.tool.to_virtual_path(&self.product_dir),
-                        force: options.force,
-                    },
-                )
-                .await?;
+            let output: NativeInstallOutput =
+                self.tool.proto.create_metric().record_tool_install_step(
+                    &self.tool.context,
+                    "native_install",
+                    self.tool
+                        .plugin
+                        .call_func_with(
+                            PluginFunction::NativeInstall,
+                            NativeInstallInput {
+                                context: self.tool.create_plugin_context(self.spec),
+                                install_dir: self.tool.to_virtual_path(&self.product_dir),
+                                force: options.force,
+                            },
+                        )
+                        .await,
+                )?;
 
             if output.installed {
                 let mut record = self.tool.create_locked_record();
@@ -164,6 +170,10 @@ impl<'tool> Installer<'tool> {
                     install_dir = ?self.product_dir,
                     "Successfully installed tool",
                 );
+
+                install_lock.unlock()?;
+
+                let _ = fs::remove_dir_all(&self.temp_dir);
 
                 Ok(Some(record))
             }
@@ -209,20 +219,25 @@ impl<'tool> Installer<'tool> {
             });
         }
 
-        let output: BuildInstructionsOutput = self
-            .tool
-            .plugin
-            .cache_func_with(
-                PluginFunction::BuildInstructions,
-                BuildInstructionsInput {
-                    context: self.tool.create_plugin_context(self.spec),
-                    install_dir: self.tool.to_virtual_path(&self.product_dir),
-                },
-            )
-            .await?;
+        let proto = &self.tool.proto;
+
+        let output: BuildInstructionsOutput = proto.create_metric().record_tool_install_step(
+            &self.tool.context,
+            "prepare_build_instructions",
+            self.tool
+                .plugin
+                .cache_func_with(
+                    PluginFunction::BuildInstructions,
+                    BuildInstructionsInput {
+                        context: self.tool.create_plugin_context(self.spec),
+                        install_dir: self.tool.to_virtual_path(&self.product_dir),
+                    },
+                )
+                .await,
+        )?;
 
         let mut system = System::default();
-        let config = self.tool.proto.load_config()?;
+        let config = proto.load_config()?;
 
         if let Some(pm) = config.settings.build.system_package_manager.get(&system.os) {
             if let Some(pm) = pm {
@@ -244,54 +259,27 @@ impl<'tool> Installer<'tool> {
             }
         }
 
-        let mut builder = Builder::new(BuilderOptions {
-            config,
-            console: options
-                .console
-                .as_ref()
-                .expect("Console required for builder!"),
-            install_dir: &self.product_dir,
-            http_client: self.tool.proto.get_plugin_loader()?.get_http_client()?,
-            log_writer: options
-                .log_writer
-                .as_ref()
-                .expect("Logger required for builder!"),
-            on_phase_change: options.on_phase_change.clone(),
-            skip_prompts: options.skip_prompts,
-            skip_ui: options.skip_ui,
-            system,
-            temp_dir: &self.temp_dir,
-            version: self.spec.get_resolved_version(),
-        });
-
-        // The build process may require using itself to build itself,
-        // so allow proto to use any available version instead of failing
-        unsafe { std::env::set_var(format!("{}_VERSION", self.tool.get_env_var_prefix()), "*") };
-
-        let mut record = self.tool.create_locked_record();
-
-        // Step 0
-        log_build_information(&mut builder, &output)?;
-
-        // Step 1
-        if config.settings.build.install_system_packages {
-            install_system_dependencies(&mut builder, &output).await?;
-        } else {
-            debug!(
-                tool = self.tool.context.as_str(),
-                "Not installing system dependencies because {} was disabled",
-                color::property("settings.build.install-system-packages"),
-            );
-        }
-
-        // Step 2
-        check_requirements(&mut builder, &output).await?;
-
-        // Step 3
-        download_sources(&mut builder, &output, &mut record).await?;
-
-        // Step 4
-        execute_instructions(&mut builder, &output, &self.tool.proto).await?;
+        let record = Builder::new(
+            self.tool,
+            BuilderOptions {
+                config,
+                console: options.console.as_ref(),
+                install_dir: &self.product_dir,
+                http_client: proto.get_plugin_loader()?.get_http_client()?,
+                log_writer: options
+                    .log_writer
+                    .as_ref()
+                    .expect("Logger required for builder!"),
+                on_phase_change: options.on_phase_change.clone(),
+                skip_prompts: options.skip_prompts,
+                skip_ui: options.skip_ui,
+                system,
+                temp_dir: &self.temp_dir,
+                version: self.spec.get_resolved_version(),
+            },
+        )
+        .build(output)
+        .await?;
 
         Ok(record)
     }
@@ -319,20 +307,24 @@ impl<'tool> Installer<'tool> {
             });
         }
 
-        let client = self.tool.proto.get_plugin_loader()?.get_http_client()?;
-        let config = self.tool.proto.load_config()?;
+        let proto = &self.tool.proto;
+        let client = proto.get_plugin_loader()?.get_http_client()?;
+        let config = proto.load_config()?;
 
-        let output: DownloadPrebuiltOutput = self
-            .tool
-            .plugin
-            .cache_func_with(
-                PluginFunction::DownloadPrebuilt,
-                DownloadPrebuiltInput {
-                    context: self.tool.create_plugin_context(self.spec),
-                    install_dir: self.tool.to_virtual_path(&self.product_dir),
-                },
-            )
-            .await?;
+        let output: DownloadPrebuiltOutput = proto.create_metric().record_tool_install_step(
+            &self.tool.context,
+            "prepare_download_prebuilt",
+            self.tool
+                .plugin
+                .cache_func_with(
+                    PluginFunction::DownloadPrebuilt,
+                    DownloadPrebuiltInput {
+                        context: self.tool.create_plugin_context(self.spec),
+                        install_dir: self.tool.to_virtual_path(&self.product_dir),
+                    },
+                )
+                .await,
+        )?;
 
         let mut record = self.tool.create_locked_record();
 
@@ -356,18 +348,22 @@ impl<'tool> Installer<'tool> {
             "Downloading tool archive"
         );
 
-        net::download_from_url_with_options(
-            &download_url,
-            &download_file,
-            DownloadOptions {
-                downloader: Some(Box::new(
-                    client.create_downloader_with_headers(output.http_headers.clone()),
-                )),
-                on_chunk: options.on_download_chunk.clone(),
-                ..Default::default()
-            },
-        )
-        .await?;
+        proto.create_metric().record_tool_install_step(
+            &self.tool.context,
+            "download_archive",
+            net::download_from_url_with_options(
+                &download_url,
+                &download_file,
+                DownloadOptions {
+                    downloader: Some(Box::new(
+                        client.create_downloader_with_headers(output.http_headers.clone()),
+                    )),
+                    on_chunk: options.on_download_chunk.clone(),
+                    ..Default::default()
+                },
+            )
+            .await,
+        )?;
 
         // Verify against a URL that contains the checksum
         if let Some(checksum_url) = output.checksum_url {
@@ -389,12 +385,18 @@ impl<'tool> Installer<'tool> {
                 "Downloading tool checksum"
             );
 
-            net::download_from_url_with_options(
-                &checksum_url,
-                &checksum_file,
-                DownloadOptions::new(client.create_downloader_with_headers(output.http_headers)),
-            )
-            .await?;
+            proto.create_metric().record_tool_install_step(
+                &self.tool.context,
+                "download_checksum",
+                net::download_from_url_with_options(
+                    &checksum_url,
+                    &checksum_file,
+                    DownloadOptions::new(
+                        client.create_downloader_with_headers(output.http_headers),
+                    ),
+                )
+                .await,
+            )?;
 
             record.checksum = Some(
                 self.verify_checksum(
@@ -433,7 +435,13 @@ impl<'tool> Installer<'tool> {
         }
         // No available checksum, so generate one ourselves for the lockfile
         else {
-            record.checksum = Some(Checksum::sha256(hash_file_contents_sha256(&download_file)?));
+            record.checksum = Some(Checksum::sha256(
+                proto.create_metric().record_tool_install_step(
+                    &self.tool.context,
+                    "generate_checksum",
+                    hash_file_contents_sha256(&download_file),
+                )?,
+            ));
         }
 
         // Attempt to unpack the archive
@@ -456,17 +464,21 @@ impl<'tool> Installer<'tool> {
                 });
             });
 
-            self.tool
-                .plugin
-                .call_func_without_output(
-                    PluginFunction::UnpackArchive,
-                    UnpackArchiveInput {
-                        input_file: self.tool.to_virtual_path(&download_file),
-                        output_dir: self.tool.to_virtual_path(&self.product_dir),
-                        context: self.tool.create_plugin_context(self.spec),
-                    },
-                )
-                .await?;
+            proto.create_metric().record_tool_install_step(
+                &self.tool.context,
+                "unpack_archive",
+                self.tool
+                    .plugin
+                    .call_func_without_output(
+                        PluginFunction::UnpackArchive,
+                        UnpackArchiveInput {
+                            input_file: self.tool.to_virtual_path(&download_file),
+                            output_dir: self.tool.to_virtual_path(&self.product_dir),
+                            context: self.tool.create_plugin_context(self.spec),
+                        },
+                    )
+                    .await,
+            )?;
         }
         // Is an archive, unpack it
         else if is_archive_file(&download_file) {
@@ -476,10 +488,16 @@ impl<'tool> Installer<'tool> {
                 });
             });
 
-            let (ext, unpacked_path) = archive::unpack_raw(
-                &self.product_dir,
-                &download_file,
-                output.archive_prefix.as_deref(),
+            let (ext, unpacked_path) = proto.create_metric().record_tool_install_step(
+                &self.tool.context,
+                "unpack_archive",
+                archive::unpack(
+                    &self.product_dir,
+                    &self.temp_dir,
+                    &download_file,
+                    output.archive_prefix.as_deref(),
+                )
+                .await,
             )?;
 
             // If the archive was `.gz` without tar or other formats,
@@ -494,8 +512,12 @@ impl<'tool> Installer<'tool> {
                 self.tool.get_file_name(),
             )));
 
-            fs::rename(&download_file, &install_path)?;
-            fs::update_perms(install_path, None)?;
+            proto.create_metric().record_tool_install_step(
+                &self.tool.context,
+                "copy_executable",
+                fs::rename(&download_file, &install_path)
+                    .and_then(|_| fs::update_perms(install_path, None)),
+            )?;
         }
 
         // Execute post install script
@@ -522,12 +544,19 @@ impl<'tool> Installer<'tool> {
                 );
 
                 let shell = ShellType::detect_with_fallback().build();
-                let mut command = Command::new(shell.to_string());
-                command.arg("-c");
-                command.arg(shell.quote(&abs_script.to_string_lossy()));
+                let mut command = Command::from(shell.create_wrapped_command_with(join_exe_args(
+                    &shell,
+                    &abs_script,
+                    &output.post_script_args,
+                    false,
+                )));
                 command.current_dir(&self.product_dir);
 
-                process::exec_command(&mut command).await?;
+                proto.create_metric().record_tool_install_step(
+                    &self.tool.context,
+                    "post_install_script",
+                    process::exec_command(&mut command).await,
+                )?;
             }
         }
 
@@ -535,7 +564,7 @@ impl<'tool> Installer<'tool> {
     }
 
     /// Uninstall the tool by deleting the current install directory.
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     pub async fn uninstall(&self) -> Result<bool, ProtoInstallError> {
         if !self.product_dir.exists() {
             debug!(
@@ -609,7 +638,13 @@ impl<'tool> Installer<'tool> {
             "Verifying checksum of downloaded file",
         );
 
-        let checksum = generate_checksum(download_file, checksum_file, checksum_public_key)?;
+        let proto = &self.tool.proto;
+
+        let checksum = proto.create_metric().record_tool_install_step(
+            &self.tool.context,
+            "generate_checksum",
+            generate_checksum(download_file, checksum_file, checksum_public_key),
+        )?;
         let verified;
 
         // Allow plugin to provide their own checksum verification method
@@ -619,25 +654,32 @@ impl<'tool> Installer<'tool> {
             .has_func(PluginFunction::VerifyChecksum)
             .await
         {
-            let output: VerifyChecksumOutput = self
-                .tool
-                .plugin
-                .call_func_with(
-                    PluginFunction::VerifyChecksum,
-                    VerifyChecksumInput {
-                        checksum_file: self.tool.to_virtual_path(checksum_file),
-                        download_file: self.tool.to_virtual_path(download_file),
-                        download_checksum: Some(checksum.clone()),
-                        context: self.tool.create_plugin_context(self.spec),
-                    },
-                )
-                .await?;
+            let output: VerifyChecksumOutput = proto.create_metric().record_tool_install_step(
+                &self.tool.context,
+                "verify_checksum",
+                self.tool
+                    .plugin
+                    .call_func_with(
+                        PluginFunction::VerifyChecksum,
+                        VerifyChecksumInput {
+                            checksum_file: self.tool.to_virtual_path(checksum_file),
+                            download_file: self.tool.to_virtual_path(download_file),
+                            download_checksum: Some(checksum.clone()),
+                            context: self.tool.create_plugin_context(self.spec),
+                        },
+                    )
+                    .await,
+            )?;
 
             verified = output.verified;
         }
         // Otherwise attempt to verify it ourselves
         else {
-            verified = verify_checksum(download_file, checksum_file, &checksum)?;
+            verified = proto.create_metric().record_tool_install_step(
+                &self.tool.context,
+                "verify_checksum",
+                verify_checksum(download_file, checksum_file, &checksum),
+            )?;
         }
 
         if verified {

@@ -1,16 +1,14 @@
 use crate::components::create_datetime;
-use crate::session::{LoadToolOptions, ProtoSession};
+use crate::session::{LoadToolOptions, ProtoSession, SessionResult};
 use clap::Args;
 use indexmap::IndexMap;
 use iocraft::prelude::{View, element};
 use proto_core::{ToolContext, ToolSpec, VersionSpec};
 use semver::VersionReq;
 use serde::Serialize;
-use starbase::AppResult;
 use starbase_console::ui::*;
-use starbase_utils::json;
 use std::collections::BTreeMap;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 #[derive(Args, Clone, Debug)]
 pub struct VersionsArgs {
@@ -35,14 +33,14 @@ pub struct VersionItem {
 }
 
 #[derive(Serialize)]
-pub struct VersionsResult {
+pub struct VersionsOutput {
     versions: Vec<VersionItem>,
     local_aliases: BTreeMap<String, ToolSpec>,
     remote_aliases: BTreeMap<String, ToolSpec>,
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn versions(session: ProtoSession, args: VersionsArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn versions(session: ProtoSession, args: VersionsArgs) -> SessionResult {
     let tool = session
         .load_tool_with_options(
             &args.context,
@@ -57,13 +55,10 @@ pub async fn versions(session: ProtoSession, args: VersionsArgs) -> AppResult {
     debug!("Loading versions from remote");
 
     if tool.remote_versions.is_empty() {
-        session.console.render_err(element! {
-            Notice(variant: Variant::Failure) {
-                StyledText(
-                    content: "No versions available from remote registry"
-                )
-            }
-        })?;
+        session.console.notice(
+            Variant::Failure,
+            "No versions available from remote registry",
+        )?;
 
         return Ok(Some(1));
     }
@@ -98,17 +93,12 @@ pub async fn versions(session: ProtoSession, args: VersionsArgs) -> AppResult {
         });
     }
 
-    if session.should_print_json() {
-        let result = VersionsResult {
+    if session.is_json_format() {
+        session.console.write_json_for_format(VersionsOutput {
             versions,
             local_aliases: tool.local_aliases,
             remote_aliases: tool.remote_aliases,
-        };
-
-        session
-            .console
-            .out
-            .write_line(json::format(&result, true)?)?;
+        })?;
 
         return Ok(None);
     }

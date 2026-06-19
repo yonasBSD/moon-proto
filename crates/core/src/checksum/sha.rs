@@ -1,37 +1,38 @@
 use super::checksum_error::ProtoChecksumError;
-use starbase_utils::fs::{self, FsError};
+use starbase_utils::fs;
+use starbase_utils::hash::{self, HashError};
+use std::fmt::Debug;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use tracing::trace;
-use warpgate::{hash_sha256, hash_sha512};
+use tracing::{instrument, trace};
 
-pub fn hash_file_contents_sha256<P: AsRef<Path>>(path: P) -> Result<String, FsError> {
+#[instrument]
+pub fn hash_file_contents_sha256<P: AsRef<Path> + Debug>(path: P) -> Result<String, HashError> {
     let path = path.as_ref();
 
     trace!(file = ?path, "Calculating SHA256 checksum");
 
-    let bytes = fs::read_file_bytes(path)?;
-    let hash = hash_sha256(bytes);
+    let hash = hash::sha256::from_file(path)?;
 
     trace!(file = ?path, hash, "Calculated hash");
 
     Ok(hash)
 }
 
-pub fn hash_file_contents_sha512<P: AsRef<Path>>(path: P) -> Result<String, FsError> {
+#[instrument]
+pub fn hash_file_contents_sha512<P: AsRef<Path> + Debug>(path: P) -> Result<String, HashError> {
     let path = path.as_ref();
 
     trace!(file = ?path, "Calculating SHA512 checksum");
 
-    let bytes = fs::read_file_bytes(path)?;
-    let hash = hash_sha512(bytes);
+    let hash = hash::sha512::from_file(path)?;
 
     trace!(file = ?path, hash, "Calculated hash");
 
     Ok(hash)
 }
 
-#[tracing::instrument(name = "verify_sha_checksum")]
+#[instrument(name = "verify_sha_checksum")]
 pub fn verify_checksum(
     download_file: &Path,
     checksum_file: &Path,
@@ -39,12 +40,7 @@ pub fn verify_checksum(
 ) -> Result<bool, ProtoChecksumError> {
     let download_file_name = fs::file_name(download_file);
 
-    for line in
-        BufReader::new(
-            fs::open_file(checksum_file).map_err(|error| ProtoChecksumError::Sha {
-                error: Box::new(error),
-            })?,
-        )
+    for line in BufReader::new(fs::open_file(checksum_file)?)
         .lines()
         .map_while(Result::ok)
     {

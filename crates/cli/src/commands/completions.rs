@@ -1,12 +1,11 @@
 use crate::app::App;
-use crate::session::ProtoSession;
+use crate::session::{ProtoSession, SessionResult};
 use clap::{Args, CommandFactory};
 use clap_complete::{Shell, generate};
 use clap_complete_nushell::Nushell;
-use iocraft::prelude::element;
-use starbase::AppResult;
 use starbase_console::ui::*;
 use starbase_shell::ShellType;
+use tracing::instrument;
 
 #[derive(Args, Clone, Debug)]
 pub struct CompletionsArgs {
@@ -14,8 +13,8 @@ pub struct CompletionsArgs {
     shell: Option<ShellType>,
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn completions(session: ProtoSession, args: CompletionsArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn completions(session: ProtoSession, args: CompletionsArgs) -> SessionResult {
     let shell = match args.shell {
         Some(value) => value,
         None => ShellType::try_detect()?,
@@ -36,15 +35,10 @@ pub async fn completions(session: ProtoSession, args: CompletionsArgs) -> AppRes
             return Ok(None);
         }
         unsupported => {
-            session.console.render_err(element! {
-                Notice(variant: Variant::Caution) {
-                    StyledText(
-                        content: format!(
-                            "<id>{unsupported}</id> does not currently support completions",
-                        ),
-                    )
-                }
-            })?;
+            session.console.notice(
+                Variant::Caution,
+                format!("<id>{unsupported}</id> does not currently support completions"),
+            )?;
 
             return Ok(Some(1));
         }

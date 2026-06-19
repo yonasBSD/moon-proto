@@ -1,6 +1,6 @@
 pub use super::locate_error::ProtoLocateError;
 use crate::helpers::ENV_VAR;
-use crate::layout::BinManager;
+use crate::layout::{BinManager, LATEST_BUCKET};
 use crate::tool::Tool;
 use crate::tool_spec::ToolSpec;
 use indexmap::IndexSet;
@@ -65,6 +65,7 @@ impl<'tool> Locator<'tool> {
         }
     }
 
+    #[instrument]
     pub async fn locate(
         tool: &'tool Tool,
         spec: &'tool ToolSpec,
@@ -73,6 +74,7 @@ impl<'tool> Locator<'tool> {
     }
 
     /// Locate all applicable executable and global paths.
+    #[instrument(skip(self))]
     pub async fn locate_all(&mut self) -> Result<LocatorResponse, ProtoLocateError> {
         Ok(LocatorResponse {
             globals_dirs: self.locate_globals_dirs().await?,
@@ -100,6 +102,7 @@ impl<'tool> Locator<'tool> {
     }
 
     /// Return location information for the primary executable within the tool directory.
+    #[instrument(skip(self))]
     pub async fn locate_primary_exe(&self) -> Result<Option<ExecutableLocation>, ProtoLocateError> {
         let output = self.call_locate_executables().await?;
         let mut primary = None;
@@ -129,6 +132,7 @@ impl<'tool> Locator<'tool> {
     }
 
     /// Return location information for all secondary executables within the tool directory.
+    #[instrument(skip(self))]
     pub async fn locate_secondary_exes(&self) -> Result<Vec<ExecutableLocation>, ProtoLocateError> {
         let output = self.call_locate_executables().await?;
         let mut locations = vec![];
@@ -154,12 +158,13 @@ impl<'tool> Locator<'tool> {
     /// Return a list of all binaries that get created in `~/.proto/bin`.
     /// The list will contain the executable config, and an absolute path
     /// to the binaries final location.
+    #[instrument(skip(self))]
     pub async fn locate_bins(
         &self,
         focused_version: Option<&VersionSpec>,
     ) -> Result<Vec<ExecutableLocation>, ProtoLocateError> {
         self.locate_bins_with_manager(
-            BinManager::from_manifest(&self.tool.inventory.manifest),
+            &BinManager::from_manifest(&self.tool.inventory.manifest),
             focused_version,
         )
         .await
@@ -167,7 +172,7 @@ impl<'tool> Locator<'tool> {
 
     pub async fn locate_bins_with_manager(
         &self,
-        bin_manager: BinManager,
+        bin_manager: &BinManager,
         focused_version: Option<&VersionSpec>,
     ) -> Result<Vec<ExecutableLocation>, ProtoLocateError> {
         let mut locations = vec![];
@@ -205,7 +210,7 @@ impl<'tool> Locator<'tool> {
                         .or(config.exe_path.as_ref())
                         .is_some()
                 {
-                    let versioned_name = if *bucket_version == "*" {
+                    let versioned_name = if *bucket_version == LATEST_BUCKET {
                         name.clone()
                     } else {
                         format!("{name}-{bucket_version}")
@@ -240,6 +245,7 @@ impl<'tool> Locator<'tool> {
     /// Return a list of all shims that get created in `~/.proto/shims`.
     /// The list will contain the executable config, and an absolute path
     /// to the shims final location.
+    #[instrument(skip(self))]
     pub async fn locate_shims(&self) -> Result<Vec<ExecutableLocation>, ProtoLocateError> {
         let output = self.call_locate_executables().await?;
         let mut locations = vec![];
@@ -275,7 +281,7 @@ impl<'tool> Locator<'tool> {
     }
 
     /// Locate the primary executable from the tool directory.
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     pub async fn locate_exe_file(&mut self) -> Result<PathBuf, ProtoLocateError> {
         if let Some(exe) = &self.exe_file {
             return Ok(exe.to_owned());
@@ -320,7 +326,7 @@ impl<'tool> Locator<'tool> {
     }
 
     /// Locate the directory that local executables are installed to.
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     pub async fn locate_exes_dirs(&mut self) -> Result<Vec<PathBuf>, ProtoLocateError> {
         if !self.exes_dirs.is_empty() {
             return Ok(self.exes_dirs.clone());
@@ -362,7 +368,7 @@ impl<'tool> Locator<'tool> {
 
     /// Return an absolute path to the globals directory that actually exists
     /// and contains files (executables).
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     pub async fn locate_globals_dir(&mut self) -> Result<Option<PathBuf>, ProtoLocateError> {
         if let Some(dir) = &self.globals_dir {
             return Ok(Some(dir.to_owned()));
@@ -420,7 +426,7 @@ impl<'tool> Locator<'tool> {
 
     /// Locate the directories that global packages are installed to.
     /// Will expand environment variables, and filter out invalid paths.
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     pub async fn locate_globals_dirs(&mut self) -> Result<Vec<PathBuf>, ProtoLocateError> {
         if !self.globals_dirs.is_empty() {
             return Ok(self.globals_dirs.clone());
@@ -505,7 +511,7 @@ impl<'tool> Locator<'tool> {
     }
 
     /// Return a string that all globals are prefixed with. Will be used for filtering and listing.
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     pub async fn locate_globals_prefix(&mut self) -> Result<Option<String>, ProtoLocateError> {
         if let Some(prefix) = &self.globals_prefix {
             return Ok(Some(prefix.to_owned()));

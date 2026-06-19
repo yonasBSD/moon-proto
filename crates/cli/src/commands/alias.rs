@@ -1,13 +1,12 @@
 use crate::error::ProtoCliError;
-use crate::session::ProtoSession;
+use crate::session::{ProtoSession, SessionResult};
 use clap::Args;
-use iocraft::prelude::element;
 use proto_core::{
     PinLocation, ProtoConfig, ToolContext, ToolSpec, UnresolvedVersionSpec, cfg, is_alias_name,
 };
-use starbase::AppResult;
 use starbase_console::ui::*;
 use starbase_styles::encode_style_tags;
+use tracing::instrument;
 
 #[derive(Args, Clone, Debug)]
 pub struct AliasArgs {
@@ -24,8 +23,8 @@ pub struct AliasArgs {
     to: PinLocation,
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn alias(session: ProtoSession, args: AliasArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn alias(session: ProtoSession, args: AliasArgs) -> SessionResult {
     if let UnresolvedVersionSpec::Alias(inner_alias) = &args.spec.req
         && args.alias == inner_alias
     {
@@ -49,19 +48,16 @@ pub async fn alias(session: ProtoSession, args: AliasArgs) -> AppResult {
         aliases[&args.alias] = cfg::value(args.spec.to_string());
     })?;
 
-    session.console.render(element! {
-        Notice(variant: Variant::Success) {
-            StyledText(
-                content: format!(
-                    "Added <id>{}</id> alias <id>{}</id> <mutedlight>(with specification <versionalt>{}</versionalt>)</mutedlight> to config <path>{}</path>",
-                    args.context,
-                    args.alias,
-                    encode_style_tags(args.spec.to_string()),
-                    config_path.display()
-                ),
-            )
-        }
-    })?;
+    session.console.notice(
+        Variant::Success,
+        format!(
+            "Added <id>{}</id> alias <id>{}</id> <mutedlight>(with specification <versionalt>{}</versionalt>)</mutedlight> to config <path>{}</path>",
+            args.context,
+            args.alias,
+            encode_style_tags(args.spec.to_string()),
+            config_path.display()
+        ),
+    )?;
 
     Ok(None)
 }

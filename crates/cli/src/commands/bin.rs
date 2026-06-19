@@ -1,9 +1,9 @@
-use crate::session::{LoadToolOptions, ProtoSession};
+use crate::session::{LoadToolOptions, ProtoSession, SessionResult};
 use clap::{Args, ValueEnum};
 use proto_core::flow::locate::Locator;
 use proto_core::flow::resolve::Resolver;
 use proto_core::{ToolContext, ToolSpec};
-use starbase::AppResult;
+use tracing::instrument;
 
 #[derive(Clone, Debug, ValueEnum)]
 enum BinDirType {
@@ -36,8 +36,8 @@ pub struct BinArgs {
     shim: bool,
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn bin(session: ProtoSession, args: BinArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn bin(session: ProtoSession, args: BinArgs) -> SessionResult {
     let tool = session
         .load_tool_with_options(
             &args.context,
@@ -61,10 +61,7 @@ pub async fn bin(session: ProtoSession, args: BinArgs) -> AppResult {
     if args.bin {
         for bin in locator.locate_bins(None).await? {
             if bin.config.primary {
-                session
-                    .console
-                    .out
-                    .write_line(bin.path.display().to_string())?;
+                session.console.message(bin.path.display().to_string())?;
 
                 return Ok(None);
             }
@@ -74,10 +71,7 @@ pub async fn bin(session: ProtoSession, args: BinArgs) -> AppResult {
     if args.shim {
         for shim in locator.locate_shims().await? {
             if shim.config.primary {
-                session
-                    .console
-                    .out
-                    .write_line(shim.path.display().to_string())?;
+                session.console.message(shim.path.display().to_string())?;
 
                 return Ok(None);
             }
@@ -92,10 +86,10 @@ pub async fn bin(session: ProtoSession, args: BinArgs) -> AppResult {
 
     if args.all {
         for path in paths {
-            session.console.out.write_line(path.display().to_string())?;
+            session.console.message(path.display().to_string())?;
         }
     } else if let Some(path) = paths.first() {
-        session.console.out.write_line(path.display().to_string())?;
+        session.console.message(path.display().to_string())?;
     }
 
     Ok(None)

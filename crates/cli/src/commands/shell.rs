@@ -1,9 +1,9 @@
 use super::exec::*;
 use crate::error::ProtoCliError;
-use crate::session::ProtoSession;
+use crate::session::{ProtoSession, SessionResult};
 use clap::Args;
-use starbase::AppResult;
 use starbase_shell::ShellType;
+use tracing::instrument;
 
 #[derive(Args, Clone, Debug)]
 pub struct ShellArgs {
@@ -14,8 +14,8 @@ pub struct ShellArgs {
     shell: Option<ShellType>,
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn shell(session: ProtoSession, args: ShellArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn shell(session: ProtoSession, args: ShellArgs) -> SessionResult {
     // Detect the shell that we need to activate for
     let shell_type = match args.shell {
         Some(value) => value,

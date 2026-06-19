@@ -1,16 +1,18 @@
 use crate::components::{Issue, IssuesList};
 use crate::error::ProtoCliError;
 use crate::helpers::fetch_latest_version;
-use crate::session::ProtoSession;
+use crate::session::{ProtoSession, SessionResult};
 use clap::Args;
-use iocraft::prelude::{FlexDirection, Text, View, element};
+use iocraft::prelude::{FlexDirection, View, element};
+use proto_core::{Id, ToolContext};
+use rustc_hash::FxHashMap;
 use serde::Serialize;
-use starbase::AppResult;
 use starbase_console::ui::*;
 use starbase_shell::ShellType;
-use starbase_utils::{envx, json};
+use starbase_utils::envx;
 use std::env;
 use std::path::PathBuf;
+use tracing::instrument;
 
 #[derive(Args, Clone, Debug)]
 pub struct DiagnoseArgs {
@@ -19,7 +21,7 @@ pub struct DiagnoseArgs {
 }
 
 #[derive(Serialize)]
-struct DiagnoseResult {
+struct DiagnoseOutput {
     shell: String,
     shell_profile: PathBuf,
     errors: Vec<Issue>,
@@ -27,8 +29,8 @@ struct DiagnoseResult {
     tips: Vec<String>,
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn diagnose(session: ProtoSession, args: DiagnoseArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn diagnose(session: ProtoSession, args: DiagnoseArgs) -> SessionResult {
     let shell_type = match args.shell {
         Some(value) => value,
         None => ShellType::try_detect()?,
@@ -39,7 +41,7 @@ pub async fn diagnose(session: ProtoSession, args: DiagnoseArgs) -> AppResult {
     let errors = gather_errors(&session, &paths, &mut tips).await?;
     let warnings = gather_warnings(&session, &paths, &mut tips).await?;
 
-    if session.should_print_json() {
+    if session.is_json_format() {
         let shell = shell_type.build();
         let shell_path = session
             .env
@@ -47,26 +49,22 @@ pub async fn diagnose(session: ProtoSession, args: DiagnoseArgs) -> AppResult {
             .load_preferred_profile()?
             .unwrap_or_else(|| shell.get_env_path(&session.env.home_dir));
 
-        session.console.out.write_line(json::format(
-            &DiagnoseResult {
-                shell: shell_type.to_string(),
-                shell_profile: shell_path,
-                errors,
-                warnings,
-                tips,
-            },
-            true,
-        )?)?;
+        session.console.write_json_for_format(DiagnoseOutput {
+            shell: shell_type.to_string(),
+            shell_profile: shell_path,
+            errors,
+            warnings,
+            tips,
+        })?;
 
         return Ok(None);
     }
 
     if errors.is_empty() && warnings.is_empty() {
-        session.console.render(element! {
-            Notice(variant: Variant::Success) {
-                Text(content: "No issues detected with your proto installation!")
-            }
-        })?;
+        session.console.notice(
+            Variant::Success,
+            "No issues detected with your proto installation!",
+        )?;
 
         return Ok(None);
     }
@@ -245,6 +243,45 @@ async fn gather_warnings(
             ),
             comment: None,
         })
+    }
+
+    // Detect tools that resolve to the same executable name (e.g. the same id
+    // provided by different backends). proto links one shim and bin per name,
+    // so the others are silently shadowed — a collision precedence can't resolve.
+    let config = session
+        .env
+        .load_config()
+        .map_err(|error| ProtoCliError::Config(Box::new(error)))?;
+
+    let mut contexts_by_id: FxHashMap<&Id, Vec<&ToolContext>> = FxHashMap::default();
+
+    for context in config.versions.keys() {
+        contexts_by_id.entry(&context.id).or_default().push(context);
+    }
+
+    for (id, contexts) in contexts_by_id {
+        if contexts.len() < 2 {
+            continue;
+        }
+
+        let mut names = contexts.iter().map(|ctx| ctx.as_str()).collect::<Vec<_>>();
+        names.sort_unstable();
+
+        warnings.push(Issue {
+            issue: format!(
+                "Multiple configured tools resolve to the executable name <file>{id}</file>: {}",
+                names
+                    .into_iter()
+                    .map(|name| format!("<id>{name}</id>"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            resolution: Some(
+                "Keep only one of these tools, as they cannot share the same shim and binary name. Otherwise the tool linked last wins, which is order-dependent."
+                    .into(),
+            ),
+            comment: None,
+        });
     }
 
     if !warnings.is_empty() {

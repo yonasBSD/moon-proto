@@ -1,17 +1,16 @@
 use crate::commands::install::{InstallArgs, install_one};
 use crate::error::ProtoCliError;
 use crate::helpers::fetch_latest_version;
-use crate::session::ProtoSession;
+use crate::session::{ProtoSession, SessionResult};
 use crate::telemetry::{Metric, track_usage};
 use clap::Args;
 use iocraft::prelude::element;
 use proto_core::{Id, PROTO_PLUGIN_KEY, SemVer, ToolContext, UnresolvedVersionSpec, is_offline};
 use semver::Version;
 use serde::Serialize;
-use starbase::AppResult;
 use starbase_console::ui::*;
 use starbase_styles::color;
-use starbase_utils::{fs, fs::FsError, json, path};
+use starbase_utils::{fs, fs::FsError, path};
 use std::env;
 use std::fmt::Debug;
 use std::path::Path;
@@ -27,15 +26,15 @@ pub struct UpgradeArgs {
 }
 
 #[derive(Serialize)]
-struct UpgradeInfo {
+struct UpgradeOutput {
     available: bool,
     current_version: String,
     latest_version: String,
     target_version: String,
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn upgrade(session: ProtoSession, args: UpgradeArgs) -> AppResult {
+#[instrument(skip(session))]
+pub async fn upgrade(session: ProtoSession, args: UpgradeArgs) -> SessionResult {
     if is_offline() {
         return Err(ProtoCliError::UpgradeRequiresInternet.into());
     }
@@ -60,16 +59,13 @@ pub async fn upgrade(session: ProtoSession, args: UpgradeArgs) -> AppResult {
         || target_version == current_version;
 
     // Output in JSON so other tools can utilize it
-    if session.should_print_json() {
-        session.console.out.write_line(json::format(
-            &UpgradeInfo {
-                available: !not_available,
-                current_version: current,
-                latest_version: latest,
-                target_version: target,
-            },
-            true,
-        )?)?;
+    if session.is_json_format() {
+        session.console.write_json_for_format(UpgradeOutput {
+            available: !not_available,
+            current_version: current,
+            latest_version: latest,
+            target_version: target,
+        })?;
 
         return Ok(None);
     }
@@ -80,45 +76,38 @@ pub async fn upgrade(session: ProtoSession, args: UpgradeArgs) -> AppResult {
             "<version>{current}</version> <mutedlight>→</mutedlight> <version>{target}</version>"
         );
 
-        session.console.render(element! {
-            Notice(variant: Variant::Info) {
-                StyledText(content: if target_version == current_version {
-                    format!("You're already on version <version>{current}</version> of proto!")
-                } else if has_explicit_target {
-                    format!("An explicit version of proto will be used: {target_chain}")
-                } else if target_version > current_version {
-                    format!("A newer version of proto is available: {target_chain}")
-                } else {
-                    format!("An older version of proto is available: {target_chain}")
-                })
-            }
-        })?;
+        session.console.notice(
+            Variant::Info,
+            if target_version == current_version {
+                format!("You're already on version <version>{current}</version> of proto!")
+            } else if has_explicit_target {
+                format!("An explicit version of proto will be used: {target_chain}")
+            } else if target_version > current_version {
+                format!("A newer version of proto is available: {target_chain}")
+            } else {
+                format!("An older version of proto is available: {target_chain}")
+            },
+        )?;
 
         return Ok(None);
     }
 
     // Already on the version, so exit early
     if not_available {
-        session.console.render(element! {
-            Notice(variant: Variant::Info) {
-                StyledText(
-                    content: format!("You're already on version <version>{current}</version> of proto!")
-                )
-            }
-        })?;
+        session.console.notice(
+            Variant::Info,
+            format!("You're already on version <version>{current}</version> of proto!"),
+        )?;
 
         return Ok(None);
     }
 
     // Confirm upgrade if another process is running
     if let Some(pid) = is_running() {
-        session.console.render_err(element! {
-            Notice(variant: Variant::Caution) {
-                StyledText(
-                    content: format!("Another instance of <shell>proto</shell> is currently running with the process ID {}. You may run into issues if you continue.", pid)
-                )
-            }
-        })?;
+        session.console.notice(
+            Variant::Caution,
+            format!("Another instance of <shell>proto</shell> is currently running with the process ID {}. You may run into issues if you continue.", pid),
+        )?;
 
         let skip_prompts = session.should_skip_prompts();
         let mut confirmed = false;
@@ -179,17 +168,14 @@ pub async fn upgrade(session: ProtoSession, args: UpgradeArgs) -> AppResult {
     .await?;
 
     if upgraded {
-        session.console.render(element! {
-            Notice(variant: Variant::Success) {
-                StyledText(
-                    content: if target_version >= current_version {
-                        format!("Upgraded proto to <version>{target}</version>!")
-                    } else {
-                        format!("Downgraded proto to <version>{target}</version>!")
-                    }
-                )
-            }
-        })?;
+        session.console.notice(
+            Variant::Success,
+            if target_version >= current_version {
+                format!("Upgraded proto to <version>{target}</version>!")
+            } else {
+                format!("Downgraded proto to <version>{target}</version>!")
+            },
+        )?;
 
         return Ok(None);
     }

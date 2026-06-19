@@ -15,6 +15,31 @@
 - [Rust](https://github.com/moonrepo/plugins/blob/master/tools/rust/CHANGELOG.md)
 - [Schema (TOML, JSON, YAML)](https://github.com/moonrepo/plugins/blob/master/tools/internal-schema/CHANGELOG.md)
 
+## 0.58.0
+
+#### 🚀 Updates
+
+- Added macOS `.pkg` and `.dmg` support for downloaded pre-builts.
+- Added a new global `--reporter` option, and `PROTO_REPORTER` environment variable, for changing how proto prints command output. Supported reporters are `text` (default), `json`, and `ndjson`.
+- Added automatic [NDJSON output](https://ndjson.com/) for detected AI agents and bots, making proto easier to consume from automated workflows.
+- Added OpenTelemetry (OTEL) support for exporting traces, logs, and metrics over OTLP.
+  - Added `--otel`, `--otel-logs`, and `--otel-service-name` global options.
+  - Added metrics for tool installs, install steps, tool uninstalls, and plugin loads.
+- Improved the bin/shim registry layer, so that we can better detect executable name collisions.
+- Improved performance of checksum file hashing.
+- Updated `proto diagnose` to include warnings about executable name collisions.
+- **WASM API**
+  - Added `DownloadPrebuiltOutput.post_script_args` field, which allows plugins to specify a list of arguments to pass to the post-install script when executing it.
+
+#### 🐞 Fixes
+
+- Fixed an issue where uninstalling a tool by version may leave around a stale/dangling bin file in `~/.proto/bin`.
+
+#### ⚙️ Internal
+
+- Updated wasmtime to v43 (from 41).
+- Updated dependencies.
+
 ## 0.57.5
 
 #### 🐞 Fixes

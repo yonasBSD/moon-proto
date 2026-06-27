@@ -15,6 +15,26 @@
 - [Rust](https://github.com/moonrepo/plugins/blob/master/tools/rust/CHANGELOG.md)
 - [Schema (TOML, JSON, YAML)](https://github.com/moonrepo/plugins/blob/master/tools/internal-schema/CHANGELOG.md)
 
+## 0.58.1
+
+#### 🚀 Updates
+
+- Added a post-install check that ensures an executable or directory exists after a tool is installed. If not, an error will be thrown.
+
+#### 🧩 Plugins
+
+- **Schema (config based)**
+  - Added `[platform.*.arch]` and `[platform.*.libc]` tables for platform-scoped `{arch}`/`{libc}` token overrides.
+
+#### 🐞 Fixes
+
+- Fixed Copilot CLI not being detected as an AI agent.
+- Fixed an issue where the shim registry may get out of sync.
+
+#### ⚙️ Internal
+
+- Updated dependencies.
+
 ## 0.58.0
 
 #### 🚀 Updates

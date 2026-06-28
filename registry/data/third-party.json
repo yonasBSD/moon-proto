@@ -97,6 +97,19 @@
       ]
     },
     {
+      "id": "awscli",
+      "locator": "github://ageha734/proto-awscli",
+      "format": "wasm",
+      "name": "AWS Command Line Interface",
+      "description": "The primary command-line tool for creating and managing AWS resources.",
+      "author": "ageha734",
+      "homepageUrl": "https://aws.amazon.com/cli/",
+      "repositoryUrl": "https://github.com/ageha734/proto-awscli",
+      "bins": [
+        "aws"
+      ]
+    },
+    {
       "id": "azure-cli",
       "locator": "github://BarretoTech/proto-azure-cli-plugin",
       "format": "wasm",
@@ -1375,6 +1388,19 @@
       ]
     },
     {
+      "id": "sdkman",
+      "locator": "github://ageha734/proto-sdkman",
+      "format": "wasm",
+      "name": "SDKMAN",
+      "description": "The Software Development Kit Manager.",
+      "author": "ageha734",
+      "homepageUrl": "https://sdkman.io/",
+      "repositoryUrl": "https://github.com/ageha734/proto-sdkman",
+      "bins": [
+        "sdkman"
+      ]
+    },
+    {
       "id": "shellcheck",
       "locator": "https://raw.githubusercontent.com/Phault/proto-toml-plugins/main/shellcheck/plugin.toml",
       "format": "toml",
@@ -1505,6 +1531,26 @@
       "author": "theomessin",
       "homepageUrl": "https://www.terraform.io/",
       "repositoryUrl": "https://github.com/theomessin/proto-toml-plugins/blob/master/terraform.toml",
+      "devicon": "terraform",
+      "bins": [
+        "terraform"
+      ],
+      "detectionSources": [
+        {
+          "file": ".terraform-version",
+          "url": "https://github.com/tfutils/tfenv#terraform-version-file"
+        }
+      ]
+    },
+    {
+      "id": "terraform",
+      "locator": "github://ageha734/proto-terraform",
+      "format": "wasm",
+      "name": "terraform",
+      "description": "Provision & Manage any Infrastructure.",
+      "author": "ageha734",
+      "homepageUrl": "https://www.terraform.io/",
+      "repositoryUrl": "https://github.com/ageha734/proto-terraform",
       "devicon": "terraform",
       "bins": [
         "terraform"
